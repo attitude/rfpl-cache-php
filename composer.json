@@ -1,0 +1,8 @@
+{
+    "name": "attitude/rfpl-cache-php",
+    "autoload": {
+        "psr-4": {
+            "RFPL\\": "src/"
+        }
+    }
+}
