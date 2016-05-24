@@ -101,23 +101,26 @@ class Cache
      *
      * @param string $content Buffered output string
      * @return string Empty string or buffer
-     * @todo Check HTTP status code
      *
      */
     public function store($content)
     {
-        $file = $this->cacheFile();
-        $dir  = dirname($file);
+        $statusCode = http_response_code();
 
-        // Create dir if not exists
-        @mkdir($dir, 0755, true);
+        if ($statusCode >= 200 && $statusCode < 300) {
+            $file = $this->cacheFile();
+            $dir  = dirname($file);
 
-        if (!realpath($dir)) {
-            throw new \Exception("Unable to create cache file directory", 500);
-        }
+            // Create dir if not exists
+            @mkdir($dir, 0755, true);
 
-        if (!file_put_contents($file, $content)) {
-            throw new \Exception("Failed to store cache for $url", 500);
+            if (!realpath($dir)) {
+                throw new \Exception("Unable to create cache file directory", 500);
+            }
+
+            if (!file_put_contents($file, $content)) {
+                throw new \Exception("Failed to store cache for $url", 500);
+            }
         }
 
         // Filter was stored, apply it to content and send response
