@@ -11,6 +11,7 @@ class Cache
     protected $ttl;
     protected $url;
     protected $filter = null;
+    protected $reset = false;
 
     public function __construct(array $options = [])
     {
@@ -41,6 +42,58 @@ class Cache
         }
 
         $this->url = $_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI'];
+
+        // Catch `header()` as it would normally pass to the response
+        set_error_handler(function($errno, $errstr, $errfile, $errline, array $errcontext) {
+            // Fast exit if already reseting cache
+            if ($this->reset) {
+                return false;
+            }
+
+            // Make shure we exit without echoing anything
+            ob_start();
+
+            // First check
+            if (strstr($errstr, 'Cannot modify header information - headers already sent')) {
+                // Get backtrace
+                $backtrace = debug_backtrace(null, 2);
+                // file_put_contents('logs/'.microtime(true).'.txt', print_r([$this->reset, func_get_args(), $backtrace], true));
+
+                // Second check: only `header` function passes
+                // If 3rd argument is used, than we're passing a HTTP status code
+                if (count($backtrace) === 2 && $backtrace[1]['function'] === 'header') {
+                    if (count($backtrace[1]['args']) === 3 && $backtrace[1]['args'][2] >= 300) {
+                        $this->resetCache();
+                        // file_put_contents('logs/'.microtime(true).'-reset1.txt', print_r($this->reset, true));
+                    }
+
+                    if (count($backtrace[1]['args']) > 0) {
+                        // Or maybe check the header string for HTTP/1.1 Status code
+                        if (preg_match('|^HTTP/\d+.\d+\s+(\d+)|', $backtrace[1]['args'][0], $statusCode)) {
+                            if ($statusCode[1] != 200) {
+                                $this->resetCache();
+                                // file_put_contents('logs/'.microtime(true).'-reset2.txt', print_r($this->reset, true));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Clean any output
+            ob_end_clean();
+
+            // It is important to remember that the standard PHP error handler
+            // is completely bypassed for the error types specified by error_types
+            // unless the callback function returns FALSE.
+            //
+            // Source: http://php.net/manual/en/function.set-error-handler.php
+            return false;
+        });
+    }
+
+    protected function resetCache()
+    {
+        $this->reset = true;
     }
 
     /**
@@ -65,7 +118,7 @@ class Cache
                 $content = $filter($content);
             }
 
-            $encoding = array_map('trim', explode(',', $_SERVER['HTTP_ACCEPT_ENCODING']));
+            $encoding = array_map('trim', explode(',', @$_SERVER['HTTP_ACCEPT_ENCODING'] ? $_SERVER['HTTP_ACCEPT_ENCODING'] : ''));
 
             if (in_array('gzip', $encoding)) {
                 $content = gzencode($content);
@@ -87,6 +140,10 @@ class Cache
                 exit;
             }
         } else {
+            // Remove cache so the next time 404 or 301 could occur
+            @unlink($file);
+            @rmdir(dirname($file));
+
             // Store filter and apply it after store procedure
             $this->filter = $filter;
         }
@@ -107,10 +164,10 @@ class Cache
     {
         $statusCode = http_response_code();
 
-        if ($statusCode >= 200 && $statusCode < 300) {
-            $file = $this->cacheFile();
-            $dir  = dirname($file);
+        $file = $this->cacheFile();
+        $dir  = dirname($file);
 
+        if (!$this->reset && $statusCode === 200) {
             // Create dir if not exists
             @mkdir($dir, 0755, true);
 
@@ -121,6 +178,14 @@ class Cache
             if (!file_put_contents($file, $content)) {
                 throw new \Exception("Failed to store cache for $url", 500);
             }
+        } else {
+            // Delete cache file
+            @unlink($file);
+            // Try to delete parent directory; works only dor empty dirs
+            @rmdir($dir);
+
+            // Forces default output in case of no cached response exists
+            return false;
         }
 
         // Filter was stored, apply it to content and send response
