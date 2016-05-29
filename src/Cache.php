@@ -11,6 +11,7 @@ class Cache
     protected $ttl;
     protected $url;
     protected $filter = null;
+    protected $alreadySent = false;
     protected $reset = false;
 
     public function __construct(array $options = [])
@@ -24,18 +25,20 @@ class Cache
         $options = array_replace($defaults, $options);
         extract($options);
 
-        if (realpath($path) && !is_dir(realpath($path))) {
+        if (!realpath($path)) {
+            // Try to create
+            @mkdir($path, 0755, true);
+        } elseif (!is_dir($path)) {
             throw new \Exception("Cache path must be a directory", 500);
         }
 
-        // Try to create
-        @mkdir($path, 0755, true);
+        $path = realpath($path);
 
-        if (!realpath($path)) {
+        if (!$path) {
             throw new \Exception("Unable to create cache directory", 500);
         }
 
-        $this->path = realpath($path);
+        $this->path = $path;
 
         if ($ttl >= 0) {
             $this->ttl = (int) $ttl;
@@ -51,7 +54,7 @@ class Cache
             }
 
             // Make shure we exit without echoing anything
-            ob_start();
+            // ob_start();
 
             // First check
             if (strstr($errstr, 'Cannot modify header information - headers already sent')) {
@@ -80,7 +83,7 @@ class Cache
             }
 
             // Clean any output
-            ob_end_clean();
+            // ob_end_clean();
 
             // It is important to remember that the standard PHP error handler
             // is completely bypassed for the error types specified by error_types
@@ -135,15 +138,13 @@ class Cache
             ob_flush();
             flush();
 
+            $this->$alreadySent = true;
+
             // Cache is still fresh:
             if (filemtime($file) + $this->ttl >= time()) {
                 exit;
             }
-        } else {
-            // Remove cache so the next time 404 or 301 could occur
-            @unlink($file);
-            @rmdir(dirname($file));
-
+        } elseif ($filter) {
             // Store filter and apply it after store procedure
             $this->filter = $filter;
         }
@@ -178,24 +179,26 @@ class Cache
             if (!file_put_contents($file, $content)) {
                 throw new \Exception("Failed to store cache for $url", 500);
             }
-        } else {
+        } elseif ($this->reset) {
             // Delete cache file
             @unlink($file);
             // Try to delete parent directory; works only dor empty dirs
             @rmdir($dir);
+        }
 
-            // Forces default output in case of no cached response exists
+        if (!$this->alreadySent) {
+            // Filter was stored, apply it to content and send response
+            if ($this->filter !== null && is_callable($this->filter)) {
+                $filter = $this->filter;
+
+                return $filter($content);
+            }
+
+            // Send original buffer
             return false;
         }
 
-        // Filter was stored, apply it to content and send response
-        if ($this->filter !== null && is_callable($this->filter)) {
-            $filter = $this->filter;
-
-            return $filter($content);
-        }
-
-        // No response, cache already sent
+        // Send nothing
         return '';
     }
 
