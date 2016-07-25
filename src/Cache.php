@@ -53,7 +53,7 @@ class Cache
                 return false;
             }
 
-            // Make shure we exit without echoing anything
+            // Make sure we exit without echoing anything
             // ob_start();
 
             // First check
@@ -138,11 +138,11 @@ class Cache
             ob_flush();
             flush();
 
-            $this->$alreadySent = true;
+            $this->alreadySent = true;
 
             // Cache is still fresh:
             if (filemtime($file) + $this->ttl >= time()) {
-                exit;
+                exit();
             }
         } elseif ($filter) {
             // Store filter and apply it after store procedure
