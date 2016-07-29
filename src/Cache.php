@@ -110,6 +110,9 @@ class Cache
     {
         // Handle only GET requests
         if (strtolower($_SERVER['REQUEST_METHOD']) !== 'get') {
+            // Delete cache file
+            @unlink($this->cacheFile());
+
             throw new \Exception("Only GET requests can be cached", 301);
         }
 
