@@ -18,7 +18,8 @@ class Cache
     {
         $defaults = [
             'path' => 'cache',
-            'ttl' => 300 // seconds to pass request
+            'ttl' => 300, // seconds to pass request
+            'requestUri' => $_SERVER['REQUEST_URI']
         ];
 
         // Merge options with defaults
@@ -44,7 +45,7 @@ class Cache
             $this->ttl = (int) $ttl;
         }
 
-        $this->url = $_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI'];
+        $this->url = $_SERVER['HTTP_HOST'].$requestUri;
 
         // Catch `header()` as it would normally pass to the response
         set_error_handler(function($errno, $errstr, $errfile, $errline, array $errcontext) {
