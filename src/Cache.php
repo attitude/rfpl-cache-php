@@ -10,6 +10,7 @@ class Cache
     protected $path;
     protected $ttl = null;
     protected $refreshInterval = null;
+    protected $nextCronTimestamp = null;
     protected $url;
     protected $filter = null;
     protected $alreadySent = false;
@@ -18,10 +19,10 @@ class Cache
     public function __construct(array $options = [])
     {
         $defaults = [
-            'path'       => 'cache',
-            'ttl'        => 300, // seconds to pass request
+            'path'            => 'cache',
+            'ttl'             => 300, // seconds to pass request
             'refreshInterval' => null, // at each N * seconds to pass request
-            'requestUri' => $_SERVER['REQUEST_URI']
+            'requestUri'      => $_SERVER['REQUEST_URI']
         ];
 
         // Merge options with defaults
@@ -47,8 +48,9 @@ class Cache
             $this->ttl = (int) $ttl;
         }
 
-        if ($this->refreshInterval !== null) {
-            $this->refreshInterval = $this->parseCronJobStamp($this->refreshInterval);
+        if ($refreshInterval !== null) {
+            $this->refreshInterval   = $this->parseCronJobStamp($refreshInterval);
+            $this->nextCronTimestamp = $this->nextCronTimestamp($refreshInterval);
         }
 
         $this->url = $_SERVER['HTTP_HOST'].$requestUri;
@@ -115,7 +117,7 @@ class Cache
      * @return void
      *
      */
-    public function serve(callable $filter = null)
+    public function serve(callable $filter = null, $sendHeaders = true)
     {
         // Handle only GET requests
         if (strtolower($_SERVER['REQUEST_METHOD']) !== 'get') {
@@ -139,14 +141,37 @@ class Cache
 
                 $encoding = array_map('trim', explode(',', @$_SERVER['HTTP_ACCEPT_ENCODING'] ? $_SERVER['HTTP_ACCEPT_ENCODING'] : ''));
 
-                if (in_array('gzip', $encoding)) {
+                if ($sendHeaders && in_array('gzip', $encoding)) {
                     $content = gzencode($content);
                     header('Content-Encoding: gzip');
                 }
 
                 $contentLength = strlen($content);
-                header('Content-Length: '.$contentLength);
-                header('Connection: close');
+
+                if ($sendHeaders) {
+                    header('Content-Length: '.$contentLength);
+                    header('Connection: close');
+                }
+
+                $ttl = null;
+
+                if ($this->nextCronTimestamp) {
+                    $ttl = $this->nextCronTimestamp - $filemtime;
+                }
+
+                if ($this->ttl && $ttl) {
+                    if ($this->ttl < $ttl) {
+                        $ttl = $this->ttl;
+                    }
+                } else {
+                    $ttl = $this->ttl;
+                }
+
+                if ($sendHeaders && $ttl) {
+                    header('Cache-Control: max-age:'.($filemtime - time() + $ttl));
+                    header_remove('Pragma');
+                    header('Expires: '.date('r', $filemtime + $ttl));
+                }
 
                 ob_start();
                 echo $content;
@@ -185,12 +210,18 @@ class Cache
         }
 
         foreach ($this->refreshInterval['year'] as $year) {
-            foreach ($this->refreshInterval['month_of_the_year'] as $month) {
-                foreach ($this->refreshInterval['day_of_the_month'] as $day) {
+            foreach ($this->refreshInterval['month_year'] as $month) {
+                foreach ($this->refreshInterval['day_month'] as $day) {
                     foreach ($this->refreshInterval['hour'] as $hour) {
                         foreach ($this->refreshInterval['minute'] as $minute) {
                             if ($time = strtotime("{$year}-{$month}-{$day} {$hour}:{$minute}")) {
-                                if (in_array(date('N', $time), $this->refreshInterval['day_of_the_week']) && $time > $filemtime) {
+                                if (in_array(date('N', $time), $this->refreshInterval['day_week']) && $time > $filemtime) {
+                                    // var_dump([
+                                    //     "{$year}-{$month}-{$day} {$hour}:{$minute}",
+                                    //     $time,
+                                    //     $filemtime
+                                    // ]);
+                                    // exit;
                                     return true;
                                 }
                             }
@@ -201,6 +232,60 @@ class Cache
         }
 
         return false;
+    }
+
+    /**
+     * Calculate next refresh timestamp
+     *
+     * @param string $cronJobTimestamp Interval string
+     * @return int Unix timestamp
+     *
+     */
+    protected function nextCronTimestamp($cronJobTimestamp)
+    {
+        if (!$this->refreshInterval) {
+            throw new \Exception('parseCronJobStamp() must be run before running nextCronTimestamp()', 500);
+        }
+
+        $nextCronJobTimestamp = $this->refreshInterval;
+
+        foreach (explode(' ', $cronJobTimestamp) as $i => &$v) {
+            if ($v === '*') {
+                switch ($i) {
+                    case 0: $nextCronJobTimestamp['minute'][]     = 1; $nextCronJobTimestamp['minute'][] = max($nextCronJobTimestamp['minute']) + 1; break;
+                    case 1: $nextCronJobTimestamp['hour'][]       = 1; $nextCronJobTimestamp['hour'][] = max($nextCronJobTimestamp['hour']) + 1; break;
+                    case 2: $nextCronJobTimestamp['day_month'][]  = 1; $nextCronJobTimestamp['day_month'][] = max($nextCronJobTimestamp['day_month']) + 1; break;
+                    case 3: $nextCronJobTimestamp['month_year'][] = 1; $nextCronJobTimestamp['month_year'][] = max($nextCronJobTimestamp['month_year']) + 1; break;
+                    case 4: $nextCronJobTimestamp['day_week'][]   = 1; $nextCronJobTimestamp['day_week'][] = max($nextCronJobTimestamp['day_week']) + 1; break;
+                    case 5: $nextCronJobTimestamp['year'][] = max($nextCronJobTimestamp['year']) + 1; break;
+                }
+            }
+        }
+
+        $timestamps = [];
+        $now = time();
+
+        foreach ($nextCronJobTimestamp['year'] as $year) {
+            foreach ($nextCronJobTimestamp['month_year'] as $month) {
+                foreach ($nextCronJobTimestamp['day_month'] as $day) {
+                    foreach ($nextCronJobTimestamp['hour'] as $hour) {
+                        foreach ($nextCronJobTimestamp['minute'] as $minute) {
+                            $timestamp = strtotime("{$year}-{$month}-{$day} {$hour}:{$minute}");
+
+                            if ($timestamp && $timestamp >= $now) {
+                                $timestamps[] = $timestamp;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (count($timestamps) === 0) {
+            return null;
+        }
+
+        return min($timestamps);
     }
 
     /**
@@ -254,12 +339,12 @@ class Cache
         }
 
         $cronValues = [
-            'minute'            => $cronJobTimestamp[0],
-            'hour'              => $cronJobTimestamp[1],
-            'day_of_the_month'  => $cronJobTimestamp[2],
-            'month_of_the_year' => $cronJobTimestamp[3],
-            'day_of_the_week'   => $cronJobTimestamp[4],
-            'year'              => $cronJobTimestamp[5]
+            'minute'     => $cronJobTimestamp[0],
+            'hour'       => $cronJobTimestamp[1],
+            'day_month'  => $cronJobTimestamp[2],
+            'month_year' => $cronJobTimestamp[3],
+            'day_week'   => $cronJobTimestamp[4],
+            'year'       => $cronJobTimestamp[5]
         ];
 
         foreach ($cronValues['minute'] as $v) {
@@ -274,19 +359,19 @@ class Cache
             }
         }
 
-        foreach ($cronValues['day_of_the_month'] as $v) {
+        foreach ($cronValues['day_month'] as $v) {
             if ($v < 1 || $v > 31) {
                 throw new \Exception("Out of range: {$v} day of the month", 1);
             }
         }
 
-        foreach ($cronValues['month_of_the_year'] as $v) {
+        foreach ($cronValues['month_year'] as $v) {
             if ($v < 1 || $v > 12) {
                 throw new \Exception("Out of range: {$v} month of the year", 1);
             }
         }
 
-        foreach ($cronValues['day_of_the_week'] as $v) {
+        foreach ($cronValues['day_week'] as $v) {
             if ($v < 1 || $v > 7) {
                 throw new \Exception("Out of range: {$v} day of the week", 1);
             }
