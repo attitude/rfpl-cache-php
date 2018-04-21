@@ -127,6 +127,11 @@ class Cache
             throw new \Exception("Only GET requests can be cached", 301);
         }
 
+        // Store filter and apply it after store procedure
+        if ($filter && is_callable($filter)) {
+            $this->filter = $filter;
+        }
+
         // Get cache file path
         if ($file = realpath($this->cacheFile())) {
             // File modify time
@@ -135,7 +140,8 @@ class Cache
             if (!$this->shouldRefresh($filemtime)) {
                 $content = file_get_contents($file);
 
-                if ($filter && is_callable($filter)) {
+                if ($this->filter) {
+                    $filter = $this->filter;
                     $content = $filter($content);
                 }
 
@@ -186,9 +192,6 @@ class Cache
                     exit();
                 }
             }
-        } elseif ($filter) {
-            // Store filter and apply it after store procedure
-            $this->filter = $filter;
         }
 
         // Cache served was old, continue with processing
@@ -420,9 +423,8 @@ class Cache
 
         if (!$this->alreadySent) {
             // Filter was stored, apply it to content and send response
-            if ($this->filter !== null && is_callable($this->filter)) {
+            if ($this->filter) {
                 $filter = $this->filter;
-
                 return $filter($content);
             }
 
