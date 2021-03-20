@@ -412,7 +412,7 @@ class Cache
             }
 
             if (!file_put_contents($file, $content)) {
-                throw new \Exception("Failed to store cache for $url", 500);
+                throw new \Exception("Failed to store cache for {$this->url}", 500);
             }
         } elseif ($this->reset) {
             // Delete cache file
